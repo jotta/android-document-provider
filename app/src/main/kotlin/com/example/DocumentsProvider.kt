@@ -310,7 +310,15 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
                 }
                 COLUMN_MIME_TYPE -> {
                     row[i] = when (node) {
-                        is com.example.File -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(node.name.substringAfterLast('.'))
+                        is com.example.File -> {
+                            when (val extension = node.name.substringAfterLast('.')) {
+                                // Demonstrate weirdness:
+                                // If the document provider messes up the mimetype, a move/copy into the document provider
+                                // from the outside fails in the Chrome OS file manager
+                                "docx" -> "application/msword"
+                                else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                            }
+                        }
                         is Folder -> MIME_TYPE_DIR
                     }
                 }
