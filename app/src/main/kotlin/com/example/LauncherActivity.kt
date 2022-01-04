@@ -16,6 +16,10 @@ class LauncherActivity : Activity(){
             documentsProvider.filesService.reset()
         }
 
+        findViewById<Button>(R.id.generate_content).setOnClickListener {
+            documentsProvider.filesService.generateContent()
+        }
+
         val enableHacksSwitch = findViewById<Switch>(R.id.enable_hacks_switch)
         enableHacksSwitch.isChecked = documentsProvider.hacksEnabled
         enableHacksSwitch.setOnCheckedChangeListener { _, state ->

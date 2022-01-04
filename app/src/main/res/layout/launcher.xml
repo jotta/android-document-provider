@@ -10,6 +10,12 @@
         android:layout_height="wrap_content"
         android:text="Reset Data" />
 
+    <Button
+        android:id="@+id/generate_content"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Generate content" />
+
     <Switch
         android:id="@+id/enable_hacks_switch"
         android:layout_width="wrap_content"

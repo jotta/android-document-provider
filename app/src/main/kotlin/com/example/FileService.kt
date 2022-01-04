@@ -5,6 +5,9 @@ import android.util.Log
 import com.example.DocumentsProvider.Companion.toDocumentUri
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.*
+import kotlin.collections.ArrayList
+import kotlin.collections.LinkedHashMap
 
 sealed class Node(val path: String) {
     val name: String get() = path.substringAfterLast("/")
@@ -26,7 +29,13 @@ class FileService(private val context: Context) {
     }
 
     private val tag: String = javaClass.simpleName
-    private val map: MutableMap<String, Node> = LinkedHashMap()
+    private val map: MutableMap<String, Node> = Collections.synchronizedMap(LinkedHashMap())
+
+    private fun filter(filter: (Int, Node) -> Boolean): Collection<Node> {
+        return synchronized(map){
+            map.values.filterIndexed(filter)
+        }
+    }
 
     init {
         reset()
@@ -38,9 +47,8 @@ class FileService(private val context: Context) {
 
     fun getChildren(path: String): Collection<Node> {
         val depth = depth(path)
-        return map.values.filter {
-            val child = depth(it.path) - 1 == depth
-            child
+        return filter { _, node ->
+            depth(node.path) - 1 == depth
         }
     }
 
@@ -83,22 +91,26 @@ class FileService(private val context: Context) {
         return to
     }
 
-    private fun update(path: String, node: Node) {
+    private fun update(path: String, node: Node, notify: Boolean = true) {
         val fileOrFolder: Node = if (path == node.path) node else when (node) {
             is File -> File(path, node.data)
             is Folder -> Folder(path)
         }
         map[path] = fileOrFolder
-        Log.i(tag, "$path = $fileOrFolder")
-        notify(path)
+        if (notify) {
+            Log.i(tag, "$path = $fileOrFolder")
+            notify(path)
+        }
     }
 
     fun recentFiles(): Collection<Node> {
-        return map.values.filterIndexed { index, _ -> index < 5 }
+        return filter { index, _ -> index < 5 }
     }
 
     fun search(query: String, rootId: String): Collection<Node> {
-        return map.values.filter { it.path.startsWith(rootId) && it.path.contains(query) }
+        return filter { _, node ->
+            node.path.startsWith(rootId) && node.path.contains(query)
+        }
     }
 
     private fun notify(path: String) {
@@ -115,6 +127,27 @@ class FileService(private val context: Context) {
         map[ROOT] = Folder(ROOT)
         keysCopy.forEach(this@FileService::notify)
         context.contentResolver.notifyChange(DocumentsProvider.rootsUri, null)
+    }
+
+    fun generateContent() {
+        var path = "/${UUID.randomUUID()}"
+        create(path, true)
+        val random = Random()
+        repeat(3000) {
+            val folder = random.nextDouble() < 0.1
+            val extension = if (folder) "" else ".txt"
+            val childPath = "${path}/${UUID.randomUUID()}?${extension}"
+            val node = if (folder) Folder(path) else {
+                val byteArray = ByteArray(32)
+                random.nextBytes(byteArray)
+                File(path, byteArray)
+            }
+            update(childPath, node, false)
+            if (folder) {
+                path = childPath
+            }
+        }
+        Log.i(tag,"generated content")
     }
 
 }
