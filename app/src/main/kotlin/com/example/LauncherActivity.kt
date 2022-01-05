@@ -25,6 +25,12 @@ class LauncherActivity : Activity(){
         enableHacksSwitch.setOnCheckedChangeListener { _, state ->
             documentsProvider.hacksEnabled = state
         }
+
+        val authenticateSwitch = findViewById<Switch>(R.id.authenticate_switch)
+        authenticateSwitch.isChecked = documentsProvider.authenticated
+        authenticateSwitch.setOnCheckedChangeListener { _, state ->
+            documentsProvider.authenticated = state
+        }
     }
 
 }

@@ -22,4 +22,10 @@
         android:layout_height="wrap_content"
         android:text="enable hacks" />
 
+    <Switch
+        android:id="@+id/authenticate_switch"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="authenticate" />
+
 </LinearLayout>

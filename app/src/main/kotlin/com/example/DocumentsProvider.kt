@@ -1,7 +1,11 @@
 package com.example
 
 import android.R
+import android.app.AuthenticationRequiredException
+import android.app.PendingIntent
+import android.app.PendingIntent.FLAG_IMMUTABLE
 import android.content.Context
+import android.content.Intent
 import android.content.IntentSender
 import android.content.SharedPreferences
 import android.content.pm.ProviderInfo
@@ -24,7 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
-import java.io.FileNotFoundException
+import java.lang.RuntimeException
 import java.lang.UnsupportedOperationException
 
 
@@ -78,17 +82,20 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
         get() = sharedPreferences.getBoolean("hacks_enabled", false);
         set(value) = sharedPreferences.edit().putBoolean("hacks_enabled", value).apply()
 
+    var authenticated
+        get() = sharedPreferences.getBoolean("authenticated", true);
+        set(value) = sharedPreferences.edit().putBoolean("authenticated", value).apply()
+
     override fun createDocument(parentDocumentId: String, mimeType: String?, displayName: String): String {
-        return operation("createDocument", parentDocumentId, mimeType, displayName) {
+        return operation(true, "createDocument", parentDocumentId, mimeType, displayName) {
             val path = join(parentDocumentId, displayName)
             filesService.create(path, mimeType == MIME_TYPE_DIR)
             path
         }
     }
 
-    @Throws(FileNotFoundException::class)
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
-        return operation("openDocument", documentId, mode, signal) {
+        return operation(true, "openDocument", documentId, mode, signal) {
             when (mode) {
                 "r" -> read(documentId)
                 "w" -> write(documentId)
@@ -191,7 +198,7 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
     }
 
     override fun copyDocument(sourceDocumentId: String, targetParentDocumentId: String): String {
-        return operation("copyDocument", sourceDocumentId, targetParentDocumentId) {
+        return operation(true, "copyDocument", sourceDocumentId, targetParentDocumentId) {
             filesService.copy(
                 sourceDocumentId,
                 join(targetParentDocumentId, sourceDocumentId.substringAfterLast("/"))
@@ -200,7 +207,7 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
     }
 
     override fun moveDocument(sourceDocumentId: String, sourceParentDocumentId: String?, targetParentDocumentId: String): String {
-        return operation("moveDocument", sourceDocumentId, sourceParentDocumentId, targetParentDocumentId) {
+        return operation(true, "moveDocument", sourceDocumentId, sourceParentDocumentId, targetParentDocumentId) {
             filesService.move(
                 sourceDocumentId,
                 join(targetParentDocumentId, sourceDocumentId.substringAfterLast("/"))
@@ -209,7 +216,7 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
     }
 
     override fun renameDocument(documentId: String, displayName: String): String? {
-        return operation("renameDocument", documentId, displayName) {
+        return operation(true, "renameDocument", documentId, displayName) {
             filesService.move(
                 documentId,
                 join(parent(documentId), displayName)
@@ -218,58 +225,90 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
     }
 
     override fun queryRecentDocuments(rootId: String, projection: Array<String>?): Cursor {
-        return operation("queryRecentDocuments", rootId, projection) {
-            val resolvedProjection = projection ?: DEFAULT_DOCUMENT_PROJECTION
-            val result = MatrixCursor(resolvedProjection)
-            filesService.recentFiles().forEach {
-                insertValue(it, result)
-            }
-            result
+        // NB: unclear if AuthenticationRequiredExceptions are supported in this context
+        return operation(true, "queryRecentDocuments", rootId, projection) {
+            doQueryRecentDocuments(rootId, projection, null, null)
         }
     }
 
-    override fun querySearchDocuments(rootId: String, query: String, projection: Array<String>?): Cursor {
-        return operation("querySearchDocuments", rootId, query, projection) {
-            val resolvedProjection = projection ?: DEFAULT_DOCUMENT_PROJECTION
-            val result = MatrixCursor(resolvedProjection)
-            filesService.search(query, rootId).forEach {
-                insertValue(it, result)
-            }
-            result
+    override fun queryRecentDocuments(rootId: String, projection: Array<out String>?, queryArgs: Bundle?, signal: CancellationSignal?): Cursor? {
+        // NB: unclear if AuthenticationRequiredExceptions are supported in this context
+        return operation(true, "queryRecentDocuments", rootId, projection, queryArgs, signal) {
+            doQueryRecentDocuments(rootId, projection, queryArgs, signal)
         }
     }
 
-    override fun queryRoots(projection: Array<out String>?): Cursor {
-        val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
-        result.newRow().apply {
-            add(Root.COLUMN_ROOT_ID, "/")
-            add(Root.COLUMN_DOCUMENT_ID, "/")
-            add(Root.COLUMN_TITLE, "example")
-            add(Root.COLUMN_ICON, android.R.drawable.star_big_off)
-            add(Root.COLUMN_SUMMARY, "example summary")
-            add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_RECENTS or Root.FLAG_SUPPORTS_SEARCH or Root.FLAG_SUPPORTS_CREATE)
+    private fun doQueryRecentDocuments(rootId: String, projection: Array<out String>?, queryArgs: Bundle?, signal: CancellationSignal?): MatrixCursor {
+        Log.i(tag, "doQueryRecentDocuments: rootId=${rootId}, projection=${projection}, queryArgs=${queryArgs}, signal=${signal}")
+        val resolvedProjection = projection ?: DEFAULT_DOCUMENT_PROJECTION
+        val result = MatrixCursor(resolvedProjection)
+        filesService.recentFiles().forEach {
+            insertValue(it, result)
         }
         return result
     }
 
-    override fun queryChildDocuments(parentDocumentId: String?, projection: Array<out String>?, queryArgs: Bundle?): Cursor {
-        return operation("queryChildDocuments", parentDocumentId, projection, queryArgs) {
-            super.queryChildDocuments(parentDocumentId, projection, queryArgs)
+    override fun querySearchDocuments(rootId: String, projection: Array<String>?, queryArgs: Bundle): Cursor? {
+        // NB: unclear if AuthenticationRequiredExceptions are supported in this context
+        return operation(true, "querySearchDocuments", rootId, projection, queryArgs) {
+            doQuerySearchDocuments(rootId, "", projection, queryArgs)
         }
     }
 
-    override fun queryChildDocuments(parentDocumentId: String, projection: Array<String>?, sortOrder: String?): Cursor {
-        return operation("queryChildDocuments", parentDocumentId, projection, sortOrder) {
-            val result = createCursor(parentDocumentId, projection)
-            filesService.getChildren(parentDocumentId).forEach {
-                insertValue(it, result)
+    override fun querySearchDocuments(rootId: String, query: String, projection: Array<String>?): Cursor {
+        return operation(true, "querySearchDocuments", rootId, query, projection) {
+            doQuerySearchDocuments(rootId, query, projection, null)
+        }
+    }
+
+    private fun doQuerySearchDocuments(rootId: String, query: String, projection: Array<String>?, queryArgs: Bundle?): MatrixCursor {
+        Log.i(tag, "doQuerySearchDocuments: rootId=${rootId}, query=${query}, projection=${projection}, queryArgs=${queryArgs}")
+        val resolvedProjection = projection ?: DEFAULT_DOCUMENT_PROJECTION
+        val result = MatrixCursor(resolvedProjection)
+        filesService.search(query, rootId).forEach {
+            insertValue(it, result)
+        }
+        return result
+    }
+
+    override fun queryRoots(projection: Array<out String>?): Cursor {
+        return operation(false, "queryRoots", projection) {
+            val result = MatrixCursor(projection ?: DEFAULT_ROOT_PROJECTION)
+            result.newRow().apply {
+                add(Root.COLUMN_ROOT_ID, "/")
+                add(Root.COLUMN_DOCUMENT_ID, "/")
+                add(Root.COLUMN_TITLE, "example")
+                add(Root.COLUMN_ICON, android.R.drawable.star_big_off)
+                add(Root.COLUMN_SUMMARY, "example summary")
+                add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_RECENTS or Root.FLAG_SUPPORTS_SEARCH or Root.FLAG_SUPPORTS_CREATE)
             }
             result
         }
     }
 
+    override fun queryChildDocuments(parentDocumentId: String, projection: Array<String>?, queryArgs: Bundle?): Cursor {
+        return operation(true, "queryChildDocuments", parentDocumentId, projection, queryArgs) {
+            queryChildDocuments(parentDocumentId, projection, null, queryArgs)
+        }
+    }
+
+    override fun queryChildDocuments(parentDocumentId: String, projection: Array<String>?, sortOrder: String?): Cursor {
+        return operation(true, "queryChildDocuments", parentDocumentId, projection, sortOrder) {
+            queryChildDocuments(parentDocumentId, projection, sortOrder)
+        }
+    }
+
+    private fun queryChildDocuments(parentDocumentId: String, projection: Array<String>?, sortOrder: String?, queryArgs: Bundle?): MatrixCursor {
+        Log.i(tag, "queryChildDocuments: parentDocumentId=${parentDocumentId}, projection=${projection}, sortOrder=${sortOrder}, queryArgs=${queryArgs}")
+        val result = createCursor(parentDocumentId, projection)
+        filesService.getChildren(parentDocumentId).forEach {
+            insertValue(it, result)
+        }
+        return result
+    }
+
     override fun queryDocument(documentId: String, projection: Array<String>?): Cursor {
-        return operation("queryDocument", documentId, projection) {
+        return operation(true, "queryDocument", documentId, projection) {
             val cursor = createCursor(documentId, projection)
             insertValue(filesService.getPath(documentId), cursor)
         }
@@ -343,104 +382,92 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
     }
 
     override fun openDocumentThumbnail(documentId: String, sizeHint: Point, signal: CancellationSignal?): AssetFileDescriptor? {
-        return operation("openDocumentThumbnail", documentId, sizeHint, signal) {
+        return operation(true, "openDocumentThumbnail", documentId, sizeHint, signal) {
             val parcelFileDescriptor = ParcelFileDescriptor.open(thumbnailFile, ParcelFileDescriptor.MODE_READ_ONLY)
             AssetFileDescriptor(parcelFileDescriptor, 0, AssetFileDescriptor.UNKNOWN_LENGTH)
         }
     }
 
     override fun deleteDocument(documentId: String) {
-        operation("deleteDocument", documentId) {
+        operation(true, "deleteDocument", documentId) {
             removeDocument(documentId, parent(documentId))
         }
     }
 
     override fun removeDocument(documentId: String, parentDocumentId: String?) {
-        operation("removeDocument", documentId, parentDocumentId) {
+        operation(true, "removeDocument", documentId, parentDocumentId) {
             filesService.delete(documentId)
         }
     }
 
-    override fun queryRecentDocuments(rootId: String, projection: Array<out String>?, queryArgs: Bundle?, signal: CancellationSignal?): Cursor? {
-        return operation("queryRecentDocuments", rootId, projection, queryArgs, signal) {
-            super.queryRecentDocuments(rootId, projection, queryArgs, signal)
-        }
-    }
-
-    override fun querySearchDocuments(rootId: String, projection: Array<out String>?, queryArgs: Bundle): Cursor? {
-        return operation("querySearchDocuments", rootId, projection, queryArgs) {
-            super.querySearchDocuments(rootId, projection, queryArgs)
-        }
-    }
-
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?, cancellationSignal: CancellationSignal?): Cursor? {
-        return operation("query", uri, projection, selection, selectionArgs, sortOrder, cancellationSignal) {
+        return operation(false, "query", uri, projection, selection, selectionArgs, sortOrder, cancellationSignal) {
             super.query(uri, projection, selection, selectionArgs, sortOrder, cancellationSignal)
         }
     }
 
     override fun canonicalize(uri: Uri): Uri? {
-        return operation("canonicalize", uri) {
+        return operation(false, "canonicalize", uri) {
             super.canonicalize(uri)
         }
     }
 
     override fun getStreamTypes(uri: Uri, mimeTypeFilter: String): Array<String>? {
-        return operation("getStreamTypes", uri, mimeTypeFilter) {
+        return operation(false, "getStreamTypes", uri, mimeTypeFilter) {
             super.getStreamTypes(uri, mimeTypeFilter)
         }
     }
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
-        return operation("call", method, arg, extras) {
+        return operation(false, "call", method, arg, extras) {
             super.call(method, arg, extras)
         }
     }
 
     override fun isChildDocument(parentDocumentId: String?, documentId: String?): Boolean {
-        return operation("isChildDocument", parentDocumentId, documentId) {
+        return operation(false, "isChildDocument", parentDocumentId, documentId) {
             super.isChildDocument(parentDocumentId, documentId)
         }
     }
 
     override fun findDocumentPath(parentDocumentId: String?, childDocumentId: String?): Path {
-        return operation("findDocumentPath", parentDocumentId, childDocumentId) {
+        return operation(true, "findDocumentPath", parentDocumentId, childDocumentId) {
             super.findDocumentPath(parentDocumentId, childDocumentId)
         }
     }
 
     override fun createWebLinkIntent(documentId: String?, options: Bundle?): IntentSender {
-        return operation("createWebLinkIntent", documentId, options) {
+        return operation(true, "createWebLinkIntent", documentId, options) {
             super.createWebLinkIntent(documentId, options)
         }
     }
 
     override fun ejectRoot(rootId: String?) {
-        return operation("ejectRoot", rootId) {
+        return operation(false, "ejectRoot", rootId) {
             super.ejectRoot(rootId)
         }
     }
 
     override fun getDocumentMetadata(documentId: String): Bundle? {
-        return operation("getDocumentMetadata", documentId) {
+        return operation(false, "getDocumentMetadata", documentId) {
             super.getDocumentMetadata(documentId)
         }
     }
 
     override fun getDocumentType(documentId: String?): String {
-        return operation("getDocumentType", documentId) {
+        return operation(true, "getDocumentType", documentId) {
             super.getDocumentType(documentId)
         }
     }
 
     override fun openTypedDocument(documentId: String?, mimeTypeFilter: String?, opts: Bundle?, signal: CancellationSignal?): AssetFileDescriptor {
-        return operation("openTypedDocument", documentId, mimeTypeFilter, opts, signal) {
+        return operation(true,"openTypedDocument", documentId, mimeTypeFilter, opts, signal) {
             super.openTypedDocument(documentId, mimeTypeFilter, opts, signal)
         }
     }
 
     override fun getDocumentStreamTypes(documentId: String?, mimeTypeFilter: String?): Array<String> {
-        return operation("getDocumentStreamTypes", documentId, mimeTypeFilter) {
+        return operation(false, "getDocumentStreamTypes", documentId, mimeTypeFilter) {
             super.getDocumentStreamTypes(documentId, mimeTypeFilter)
         }
     }
@@ -470,9 +497,22 @@ class DocumentsProvider : android.provider.DocumentsProvider() {
         super.attachInfo(context, info)
     }
 
-    private fun <T> operation(operationName: String, vararg args: Any?, callback: () -> T): T {
+    private fun <T> operation(protected: Boolean, operationName: String, vararg args: Any?, callback: () -> T): T {
         Log.i(tag, "$operationName(${args.joinToString(transform = this::toString)})")
-        return callback()
+        if (protected && !authenticated) {
+            Log.w(tag, "unauthenticated")
+            val exception = RuntimeException("please authenticate")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                throw AuthenticationRequiredException(
+                    exception,
+                    PendingIntent.getActivity(context, 0, Intent(), FLAG_IMMUTABLE)
+                )
+            } else {
+                throw exception
+            }
+        } else {
+            return callback()
+        }
     }
 
     private fun toString(any: Any?): String {
