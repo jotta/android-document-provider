@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:largeHeap="true"
         android:icon="@android:drawable/star_big_off">
         <activity
             android:name=".LauncherActivity"
